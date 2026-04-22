@@ -1,0 +1,17 @@
+#!/bin/sh
+# runit service: binfmt-wine-shim
+#
+# Re-runs /usr/local/sbin/wine-shim-setup at every boot so
+#   * /etc/wine-shim/machine-ids/host-dmi tracks the live SMBIOS UUID
+#   * the binfmt_misc MZ -> wine-shim-binfmt entry is always present
+#
+# Enable: ln -s /etc/sv/binfmt-wine-shim /var/service/
+#
+# The work is one-shot; we sleep forever so runit keeps the service marked
+# "running" rather than relaunching the setup script in a tight loop.
+exec 2>&1
+set -e
+
+/usr/local/sbin/wine-shim-setup
+
+exec sleep infinity

@@ -1,0 +1,63 @@
+#!/bin/sh
+# wine-shim-setup — boot-time / install-time setup for wine-shim.
+#
+# Must run as root. Responsibilities:
+#   1. Read host SMBIOS UUID from /sys/class/dmi/id/product_uuid and write its
+#      Wine-compatible (pre-swapped) form to /etc/wine-shim/machine-ids/host-dmi
+#      so unprivileged processes can consume it via LD_PRELOAD.
+#   2. Load the kernel binfmt_misc module and mount the pseudo-fs if needed.
+#   3. Register a binfmt_misc handler for PE (MZ-header) executables that
+#      routes them through /usr/local/bin/wine-shim-binfmt.
+#
+# Idempotent: can be re-run any time to pick up e.g. motherboard replacement.
+
+set -eu
+
+MID_DIR=/etc/wine-shim/machine-ids
+BINFMT_DIR=/proc/sys/fs/binfmt_misc
+HANDLER=/usr/local/bin/wine-shim-binfmt
+REG_NAME=wine-shim
+
+log() { printf 'wine-shim-setup: %s\n' "$*"; }
+die() { printf 'wine-shim-setup: error: %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "must run as root"
+
+install -d -m 0755 "$MID_DIR"
+
+src=/sys/class/dmi/id/product_uuid
+if [ -r "$src" ]; then
+    dmi_uuid=$(tr -d '\n' <"$src")
+    if [ -n "$dmi_uuid" ] && [ "$dmi_uuid" != "00000000-0000-0000-0000-000000000000" ]; then
+        tmp=$(mktemp "$MID_DIR/.host-dmi.XXXXXX")
+        /usr/local/bin/wine-shim-dmi-id "$dmi_uuid" >"$tmp"
+        chmod 0644 "$tmp"
+        mv "$tmp" "$MID_DIR/host-dmi"
+        log "wrote $MID_DIR/host-dmi (from $dmi_uuid)"
+    else
+        log "skip host-dmi: DMI UUID missing or all-zero"
+    fi
+else
+    log "skip host-dmi: $src unreadable"
+fi
+
+if [ ! -f "$BINFMT_DIR/register" ]; then
+    modprobe binfmt_misc 2>/dev/null || true
+    if [ ! -f "$BINFMT_DIR/register" ]; then
+        mount -t binfmt_misc binfmt_misc "$BINFMT_DIR" 2>/dev/null || true
+    fi
+fi
+[ -f "$BINFMT_DIR/register" ] || die "binfmt_misc not available"
+
+if [ -x "$HANDLER" ]; then
+    if [ -e "$BINFMT_DIR/$REG_NAME" ]; then
+        echo -1 >"$BINFMT_DIR/$REG_NAME"
+    fi
+    # Flags intentionally empty: 'OC' made execve fail ENOEXEC on Void Linux
+    # (kernel 6.12 + ntfs3); passing the path in argv and inheriting the
+    # caller's credentials is what Wine expects anyway.
+    printf ':%s:M::MZ::%s:' "$REG_NAME" "$HANDLER" >"$BINFMT_DIR/register"
+    log "registered binfmt_misc entry '$REG_NAME' -> $HANDLER"
+else
+    log "skip binfmt registration: $HANDLER not installed"
+fi

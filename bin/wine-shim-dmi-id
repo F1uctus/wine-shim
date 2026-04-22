@@ -1,0 +1,58 @@
+#!/bin/sh
+# wine-shim-dmi-id — convert an SMBIOS UUID display string to the Wine machine-id
+# form that makes Wine emit Windows-identical raw SMBIOS UUID bytes.
+#
+# Wine's ntdll/unix/system.c:get_system_uuid() copies the 32-hex-char
+# /var/lib/dbus/machine-id straight into the SMBIOS Type-1 UUID field without
+# the first-three-field byte reversal that Windows applies when displaying
+# UUIDs from SMBIOS. Consequently, two Wine processes feeding the same
+# machine-id into Wine and into /sys/class/dmi/id/product_uuid on real Windows
+# produce different raw SMBIOS bytes, which trips hardware-locked licences
+# (Sentinel RMS etc.) that hash those raw bytes.
+#
+# This script performs the compensating byte-pair reversal on the first three
+# fields of the displayed UUID, so Wine's naive copy results in raw bytes
+# identical to a real Windows BIOS for the same displayed UUID.
+#
+# Usage:
+#   wine-shim-dmi-id                       # read host UUID (needs root or a+r
+#                                          # on /sys/class/dmi/id/product_uuid)
+#   wine-shim-dmi-id <uuid>                # convert given UUID
+#   echo <uuid> | wine-shim-dmi-id -       # convert UUID from stdin
+#
+# The result is a 32-lowercase-hex-char machine-id ready to be written into
+# /etc/wine-shim/machine-ids/<name> and served to Wine via the machine-id shim.
+
+set -eu
+
+host_uuid() {
+    src=/sys/class/dmi/id/product_uuid
+    if [ ! -r "$src" ]; then
+        printf 'wine-shim-dmi-id: cannot read %s (run as root or chmod a+r)\n' "$src" >&2
+        exit 1
+    fi
+    tr -d '\n' <"$src"
+}
+
+case "${1:-}" in
+    '')        u=$(host_uuid)        ;;
+    -)         u=$(tr -d '\n')       ;;
+    -h|--help) sed -n '/^# Usage:/,/^# The result/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)         u="$1"                ;;
+esac
+
+u=$(printf '%s' "$u" | tr -d '-' | tr 'A-F' 'a-f')
+case "$u" in
+    *[!0-9a-f]*|'') echo "wine-shim-dmi-id: not a hex UUID: $u" >&2; exit 2 ;;
+esac
+[ "${#u}" = 32 ] || { echo "wine-shim-dmi-id: expected 32 hex chars, got ${#u}" >&2; exit 2; }
+
+rev4() { printf '%s%s%s%s' "${1#??????}" "$(expr substr "$1" 5 2)" "$(expr substr "$1" 3 2)" "${1%??????}"; }
+rev2() { printf '%s%s' "${1#??}" "${1%??}"; }
+
+f1=$(rev4 "$(echo "$u" | cut -c1-8)")
+f2=$(rev2 "$(echo "$u" | cut -c9-12)")
+f3=$(rev2 "$(echo "$u" | cut -c13-16)")
+f4=$(echo "$u" | cut -c17-32)
+
+printf '%s%s%s%s\n' "$f1" "$f2" "$f3" "$f4"

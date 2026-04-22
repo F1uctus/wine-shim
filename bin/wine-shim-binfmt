@@ -1,0 +1,43 @@
+#!/bin/sh
+# wine-shim-binfmt — binfmt_misc entry point for Windows (PE) executables.
+#
+# Registered via /usr/local/sbin/wine-shim-setup as:
+#   :wine-shim:M::MZ::/usr/local/bin/wine-shim-binfmt:OC
+#
+# Invocation shape (flags "OC" = Open Original + use Credentials):
+#   wine-shim-binfmt <absolute-path-to.exe> [args...]
+#
+# Profile selection (first match wins):
+#   1. $WINE_SHIM_PROFILE                  explicit override
+#   2. walk up from dirname(.exe) looking for a .wineshim file whose first
+#      non-empty line is a profile name                         (per-install)
+#   3. "default"                                                (fallback)
+#
+# The .exe path is converted to a Windows-style path via `winepath -w` using
+# the resolved profile's WINEPREFIX, so drop-in tools like
+# `/path/to/iarbuild.exe foo.ewp -build Debug` work regardless of mount point.
+
+set -eu
+
+[ $# -ge 1 ] || { echo "wine-shim-binfmt: missing exe path" >&2; exit 64; }
+exe="$1"; shift
+
+profile="${WINE_SHIM_PROFILE:-}"
+if [ -z "$profile" ]; then
+    dir=$(dirname -- "$exe")
+    while :; do
+        if [ -r "$dir/.wineshim" ]; then
+            profile=$(sed -n '/^[[:space:]]*[^#[:space:]]/{s/^[[:space:]]*//;s/[[:space:]].*$//;p;q}' "$dir/.wineshim")
+            [ -n "$profile" ] && break
+        fi
+        [ "$dir" = / ] || [ -z "$dir" ] && break
+        dir=$(dirname -- "$dir")
+    done
+fi
+profile="${profile:-default}"
+
+win_exe=$(WINEDEBUG=-all /usr/local/bin/wine-shim-run "$profile" winepath -w -- "$exe" 2>/dev/null \
+            | tr -d '\r')
+[ -n "$win_exe" ] || win_exe="$exe"
+
+exec /usr/local/bin/wine-shim-run "$profile" "$win_exe" "$@"

@@ -1,0 +1,81 @@
+#!/bin/sh
+# wine-shim-run — launch Wine under a named profile.
+#
+# Usage:
+#   wine-shim-run <profile> <wine-args...>
+#
+# A profile is just a POSIX-sourced file that can export any env vars Wine
+# understands (WINEPREFIX, WINEARCH, WINEDEBUG, WINEDLLOVERRIDES, ...) and
+# two wine-shim-specific vars:
+#
+#   WINE_SHIM_LIBS
+#       Space-separated list of shim names to LD_PRELOAD, e.g.
+#       "machine-id". Each name <x> maps to
+#       /usr/local/lib/wine-shim/libwine-shim-<x>.so.
+#
+#   WINE_SHIM_MACHINE_ID_FILE
+#       Path to a 32-hex-char file, consumed by the machine-id shim.
+#
+# Profile search order (first match wins):
+#   ~/.config/wine-shim/profiles/<name>.profile
+#   /etc/wine-shim/profiles/<name>.profile
+#
+# Example profile (iar.profile):
+#   export WINEPREFIX="$HOME/.wine-iar"
+#   export WINEARCH=win64
+#   export WINEDEBUG=-all
+#   export WINEDLLOVERRIDES="mscoree,mshtml="
+#   export WINE_SHIM_LIBS="machine-id"
+#   export WINE_SHIM_MACHINE_ID_FILE=/etc/wine-shim/machine-ids/host-dmi
+
+set -eu
+
+LIBDIR=/usr/local/lib/wine-shim
+SYS_PROF=/etc/wine-shim/profiles
+USR_PROF="${XDG_CONFIG_HOME:-$HOME/.config}/wine-shim/profiles"
+
+usage() {
+    sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
+}
+
+[ $# -ge 1 ] || usage 2
+case "$1" in -h|--help) usage 0 ;; esac
+
+profile="$1"; shift
+
+resolve_profile() {
+    for d in "$USR_PROF" "$SYS_PROF"; do
+        [ -r "$d/$1.profile" ] && { printf '%s\n' "$d/$1.profile"; return 0; }
+    done
+    return 1
+}
+
+path=$(resolve_profile "$profile") || {
+    printf 'wine-shim-run: unknown profile: %s\n' "$profile" >&2
+    printf '  searched: %s %s\n' "$USR_PROF" "$SYS_PROF" >&2
+    exit 3
+}
+
+# shellcheck disable=SC1090
+. "$path"
+
+preload=
+for lib in ${WINE_SHIM_LIBS:-}; do
+    p="$LIBDIR/libwine-shim-$lib.so"
+    if [ -r "$p" ]; then
+        preload="${preload:+$preload:}$p"
+    else
+        printf 'wine-shim-run: warning: missing shim %s\n' "$p" >&2
+    fi
+done
+
+if [ -n "$preload" ]; then
+    if [ -n "${LD_PRELOAD:-}" ]; then
+        export LD_PRELOAD="$preload:$LD_PRELOAD"
+    else
+        export LD_PRELOAD="$preload"
+    fi
+fi
+
+exec wine "$@"

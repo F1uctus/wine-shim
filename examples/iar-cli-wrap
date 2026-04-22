@@ -1,0 +1,18 @@
+#!/bin/sh
+# User-friendly wrapper for an IAR CLI tool. Invoked by its base name,
+# it locates <name>.exe under $IAR_BASE and execs it (binfmt_misc then
+# dispatches to wine-shim-binfmt -> iar profile).
+#
+# Using a shell wrapper (rather than a symlink in $HOME/.local/bin) is
+# required because IAR tools resolve their own installation directory from
+# argv[0] to find include paths, device files, etc.; argv[0] must point at
+# the real .exe inside the IAR install tree.
+IAR_BASE="${IAR_BASE:-/run/media/f1uctus/System/Program Files/IAR Systems/Embedded Workbench 9.2}"
+name=$(basename -- "$0")
+for d in "$IAR_BASE/arm/bin" "$IAR_BASE/common/bin"; do
+    if [ -x "$d/$name.exe" ]; then
+        exec "$d/$name.exe" "$@"
+    fi
+done
+printf '%s: no matching .exe found under %s\n' "$name" "$IAR_BASE" >&2
+exit 127
