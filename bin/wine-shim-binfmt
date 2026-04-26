@@ -2,15 +2,20 @@
 # wine-shim-binfmt — binfmt_misc entry point for Windows (PE) executables.
 #
 # Registered via /usr/local/sbin/wine-shim-setup as:
-#   :wine-shim:M::MZ::/usr/local/bin/wine-shim-binfmt:OC
+#   :wine-shim:M::MZ::/usr/local/bin/wine-shim-binfmt:
 #
-# Invocation shape (flags "OC" = Open Original + use Credentials):
+# Invocation shape:
 #   wine-shim-binfmt <absolute-path-to.exe> [args...]
+#
+# Symlinks are resolved with `readlink -f` before profile lookup, so a
+# user-friendly symlink in ~/.local/bin pointing at the real .exe works
+# transparently — Wine sees the real path and finds adjacent DLLs, and the
+# .wineshim walker finds the marker that lives next to the executable.
 #
 # Profile selection (first match wins):
 #   1. $WINE_SHIM_PROFILE                  explicit override
-#   2. walk up from dirname(.exe) looking for a .wineshim file whose first
-#      non-empty line is a profile name                         (per-install)
+#   2. walk up from dirname(real_exe) looking for a .wineshim file whose
+#      first non-empty line is a profile name                  (per-install)
 #   3. "default"                                                (fallback)
 #
 # The .exe path is converted to a Windows-style path via `winepath -w` using
@@ -20,7 +25,7 @@
 set -eu
 
 [ $# -ge 1 ] || { echo "wine-shim-binfmt: missing exe path" >&2; exit 64; }
-exe="$1"; shift
+exe=$(readlink -f -- "$1"); shift
 
 profile="${WINE_SHIM_PROFILE:-}"
 if [ -z "$profile" ]; then
